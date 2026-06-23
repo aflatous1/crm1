@@ -1,0 +1,6 @@
+{
+  "name": "Aflatous CRM",
+  "description": "سیستم مدیریت ارتباط با مشتری (CRM) و داشبورد فروش کلینیک زیبایی افلاطوس",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
