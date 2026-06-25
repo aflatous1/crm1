@@ -314,6 +314,53 @@ export default function Settings({
           </div>
         </div>
 
+        {/* Cloudflare D1 Worker Section */}
+        <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm space-y-4">
+          <div className="flex items-center gap-2 pb-3 border-b border-gray-50">
+            <div className="p-2 bg-blue-50 text-blue-600 rounded-lg">
+              <Globe size={18} />
+            </div>
+            <h3 className="text-sm font-bold text-gray-800 font-sans">پایگاه داده ابری (Cloudflare D1)</h3>
+          </div>
+
+          <div className="space-y-4">
+            <div>
+              <label className="block text-xs font-bold text-gray-650 mb-1">آدرس Cloudflare Worker</label>
+              <input
+                type="url"
+                value={settings.workerUrl || ""}
+                onChange={(e) => onUpdateSettings({ workerUrl: e.target.value })}
+                placeholder="https://aflatous-crm-api.aflatous-crm.workers.dev"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-left font-mono text-xs focus:ring-1 focus:ring-blue-500 outline-none"
+                dir="ltr"
+              />
+              <span className="text-[10px] text-gray-400 mt-1 block">آدرس Worker که هنگام deploy دریافت کردید</span>
+            </div>
+
+            <div className="flex justify-between items-center bg-gray-55 p-3 rounded-xl border border-gray-100">
+              <div className="text-right">
+                <p className="text-xs font-bold text-gray-800">ذخیره در پایگاه داده ابری</p>
+                <p className="text-[10px] text-gray-400 mt-0.5">تمام تغییرات در Cloudflare D1 ذخیره می‌شوند</p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={settings.isWorkerEnabled || false}
+                  onChange={(e) => onUpdateSettings({ isWorkerEnabled: e.target.checked })}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-gray-250 rounded-full peer peer-checked:after:-translate-x-full after:content-[''] after:absolute after:top-0.5 after:right-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+              </label>
+            </div>
+
+            <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 text-xs text-blue-800 leading-relaxed font-sans space-y-1">
+              <p className="font-bold">آدرس Worker پروژه شما:</p>
+              <p className="font-mono text-[10px] break-all text-left" dir="ltr">https://aflatous-crm-api.aflatous-crm.workers.dev</p>
+              <p className="mt-2 text-blue-600">آدرس بالا را در فیلد بالا وارد کنید و کلید را روشن کنید.</p>
+            </div>
+          </div>
+        </div>
+
         {/* System Roles Configuration */}
         <div className="bg-white border border-gray-100 rounded-2xl p-6 shadow-sm space-y-4">
           <div className="flex items-center gap-2 pb-3 border-b border-gray-50">
