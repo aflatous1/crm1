@@ -7,6 +7,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { User, Lead, SystemSettings, Role, LeadChangeLog } from './types';
 import { SEED_DOCTORS, SEED_LEADS_NORMALIZED } from './data';
 import { fetchLeadsFromGviz, DEFAULT_SPREADSHEET_ID, appendLeadToSheet, updateLeadInSheet, deleteLeadInSheet } from './sheets';
+import { AflatousDB } from './db';
 import { getTodayJalali, dateDiffDays, toPersianDigits, formatJalaliDate, formatPrice } from './jalali';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -66,7 +67,9 @@ export default function App() {
       doctors: SEED_DOCTORS,
       sources: ['اینستاگرام', 'تبلیغات', 'معرفی', 'گوگل', 'واتساپ', 'تماس مستقیم', 'سایر'],
       secretaryReportsEnabled: false,
-      managerReportsEnabled: true
+      managerReportsEnabled: true,
+      workerUrl: '',
+      isWorkerEnabled: false,
     };
   });
 
@@ -219,6 +222,15 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('aflatous_settings', JSON.stringify(settings));
   }, [settings]);
+  // Cloudflare D1 instance
+  const db = React.useMemo(() => {
+    if (settings.isWorkerEnabled && settings.workerUrl) {
+      return new AflatousDB(settings.workerUrl);
+    }
+    return null;
+  }, [settings.workerUrl, settings.isWorkerEnabled]);
+
+
 
   // Sync / Read from Google Sheets on load
   const loadLeadsFromSheet = async (silently: boolean = false) => {
@@ -389,10 +401,15 @@ export default function App() {
         };
         updatedLeads[index] = updatedLead;
         
-        // Sync to Sheets
+        // Sync to Sheets (Google)
         if (settings.isSyncEnabled && settings.accessToken) {
           const spreadsheetId = settings.googleSheetUrl.match(/\/d\/([^/]+)/)?.[1] || DEFAULT_SPREADSHEET_ID;
           await updateLeadInSheet(updatedLead, settings.accessToken, spreadsheetId);
+        }
+        // Sync to Cloudflare D1
+        if (db) {
+          const ok = await db.updateLead(updatedLead, currentUser?.name || 'system');
+          if (!ok) console.warn('D1 update failed for lead', updatedLead.id);
         }
       }
     } else {
@@ -418,10 +435,15 @@ export default function App() {
       };
       updatedLeads.unshift(newLead);
 
-      // Sync to Sheets
+      // Sync to Sheets (Google)
       if (settings.isSyncEnabled && settings.accessToken) {
         const spreadsheetId = settings.googleSheetUrl.match(/\/d\/([^/]+)/)?.[1] || DEFAULT_SPREADSHEET_ID;
         await appendLeadToSheet(newLead, settings.accessToken, spreadsheetId);
+      }
+      // Sync to Cloudflare D1
+      if (db) {
+        const ok = await db.saveLead(newLead, currentUser?.name || 'system');
+        if (!ok) console.warn('D1 save failed for new lead');
       }
     }
 
@@ -435,10 +457,15 @@ export default function App() {
     setIsLoading(true);
     const updatedLeads = leads.filter((l) => l.id !== id);
     
-    // Sync to Sheets
+    // Sync to Sheets (Google)
     if (settings.isSyncEnabled && settings.accessToken) {
       const spreadsheetId = settings.googleSheetUrl.match(/\/d\/([^/]+)/)?.[1] || DEFAULT_SPREADSHEET_ID;
       await deleteLeadInSheet(id, settings.accessToken, spreadsheetId);
+    }
+    // Sync to Cloudflare D1
+    const deletedLead = leads.find(l => l.id === id);
+    if (db && deletedLead) {
+      await db.deleteLead(deletedLead.phone);
     }
 
     setLeads(updatedLeads);

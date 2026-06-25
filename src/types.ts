@@ -34,7 +34,7 @@ export type LeadStatus =
 
 export interface LeadChangeLog {
   id: string;
-  changeDate: string; // "1405/03/23 10:15"
+  changeDate: string;
   editorName: string;
   status: LeadStatus;
   doctor: string;
@@ -46,8 +46,8 @@ export interface LeadChangeLog {
 }
 
 export interface Lead {
-  id: string; // unique ID
-  date: string; // "1405/04/02"
+  id: string;
+  date: string;
   patientName: string;
   phone: string;
   doctor: string;
@@ -56,10 +56,10 @@ export interface Lead {
   status: LeadStatus;
   announcedCost: number;
   contractAmount: number;
-  nextFollowUpDate: string; // "1405/04/05"
+  nextFollowUpDate: string;
   notes: string;
   isFollowUpCompleted?: boolean;
-  assignedTo?: string; // مسئول پیگیری
+  assignedTo?: string;
   history?: LeadChangeLog[];
 }
 
@@ -72,4 +72,7 @@ export interface SystemSettings {
   sources?: string[];
   secretaryReportsEnabled?: boolean;
   managerReportsEnabled?: boolean;
+  // ← جدید: آدرس Cloudflare Worker
+  workerUrl?: string;
+  isWorkerEnabled?: boolean;
 }
