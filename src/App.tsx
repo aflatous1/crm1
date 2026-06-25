@@ -256,7 +256,25 @@ export default function App() {
       if (!silently) setIsLoading(false);
     }
   };
+const loadLeadsFromD1 = async () => {
+  if (!db) return;
 
+  try {
+    setIsLoading(true);
+
+    const d1Leads = await db.getAllLeads();
+
+    if (d1Leads.length > 0) {
+      setLeads(d1Leads);
+      setSyncStatus('connected');
+      setConnectionMessage('داده‌ها از Cloudflare D1 بارگذاری شدند');
+    }
+  } catch (err) {
+    console.error(err);
+  } finally {
+    setIsLoading(false);
+  }
+};
   useEffect(() => {
     loadLeadsFromSheet(true);
   }, [settings.googleSheetUrl]);
