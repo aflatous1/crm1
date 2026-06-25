@@ -275,10 +275,13 @@ const loadLeadsFromD1 = async () => {
     setIsLoading(false);
   }
 };
-  useEffect(() => {
+useEffect(() => {
+  if (settings.isWorkerEnabled && db) {
+    loadLeadsFromD1();
+  } else {
     loadLeadsFromSheet(true);
-  }, [settings.googleSheetUrl]);
-
+  }
+}, [db, settings.isWorkerEnabled, settings.googleSheetUrl]);
   // Notifications logic (Pending & Overdue Followups Today)
   const notificationCount = useMemo(() => {
     const todayStr = getTodayJalali();
