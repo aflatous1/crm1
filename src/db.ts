@@ -187,4 +187,58 @@ export class AflatousDB {
       return false;
     }
   }
+// ─── دریافت همه لیدها از D1 ─────────────────────
+async getAllLeads(): Promise<Lead[]> {
+try {
+const customersRes = await this.request('/api/customers') as {
+data: Array<any>;
+};
+
+```
+  const leads: Lead[] = [];
+
+  for (const customer of customersRes.data || []) {
+    const apptsRes = await this.request(
+      `/api/appointments?customer_id=${customer.id}`
+    ) as {
+      data: Array<any>;
+    };
+
+    for (const appt of apptsRes.data || []) {
+      let extra: any = {};
+
+      try {
+        extra = appt.notes ? JSON.parse(appt.notes) : {};
+      } catch {
+        extra = {};
+      }
+
+      leads.push({
+        id: extra.customer_id_ext || `d1-${appt.id}`,
+        date: extra.date || '',
+        patientName: customer.name || '',
+        phone: customer.phone || '',
+        doctor: appt.doctor || '',
+        service: appt.service_name || '',
+        source: extra.source || 'سایر',
+        status: extra.originalStatus || appt.status || 'تماس اولیه',
+        announcedCost: appt.price || 0,
+        contractAmount: appt.paid || 0,
+        nextFollowUpDate: extra.nextFollowUpDate || '',
+        notes: '',
+        isFollowUpCompleted: extra.isFollowUpCompleted || false,
+        assignedTo: extra.assignedTo || '',
+        history: extra.history || [],
+      } as Lead);
+    }
+  }
+
+  return leads;
+} catch (e) {
+  console.error('DB getAllLeads error:', e);
+  return [];
 }
+```
+
+}
+
