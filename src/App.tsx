@@ -256,32 +256,38 @@ export default function App() {
       if (!silently) setIsLoading(false);
     }
   };
-const loadLeadsFromD1 = async () => {
-  if (!db) return;
 
-  try {
-    setIsLoading(true);
-
-    const d1Leads = await db.getAllLeads();
-
-    if (d1Leads.length > 0) {
-      setLeads(d1Leads);
-      setSyncStatus('connected');
-      setConnectionMessage('داده‌ها از Cloudflare D1 بارگذاری شدند');
+  // Load leads from Cloudflare D1
+  const loadLeadsFromD1 = async () => {
+    if (!db) return;
+    try {
+      setIsLoading(true);
+      const result = await db.getAllLeads();
+      if (result && result.length > 0) {
+        setLeads(result);
+        setSyncStatus('connected');
+        setConnectionMessage('داده‌ها از پایگاه داده D1 بارگذاری شدند');
+      } else {
+        setSyncStatus('connected');
+        setConnectionMessage('اتصال D1 برقرار است - هنوز داده‌ای ثبت نشده');
+      }
+    } catch (err: any) {
+      console.error('D1 load error:', err);
+      setSyncStatus('error');
+      setConnectionMessage('خطا در بارگذاری داده‌ها از D1');
+    } finally {
+      setIsLoading(false);
     }
-  } catch (err) {
-    console.error(err);
-  } finally {
-    setIsLoading(false);
-  }
-};
-useEffect(() => {
-  if (settings.isWorkerEnabled && db) {
-    loadLeadsFromD1();
-  } else {
-    loadLeadsFromSheet(true);
-  }
-}, [db, settings.isWorkerEnabled, settings.googleSheetUrl]);
+  };
+
+  useEffect(() => {
+    if (settings.isWorkerEnabled && db) {
+      loadLeadsFromD1();
+    } else {
+      loadLeadsFromSheet(true);
+    }
+  }, [settings.googleSheetUrl, settings.isWorkerEnabled, db]);
+
   // Notifications logic (Pending & Overdue Followups Today)
   const notificationCount = useMemo(() => {
     const todayStr = getTodayJalali();
