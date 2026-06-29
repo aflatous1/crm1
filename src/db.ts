@@ -3,119 +3,192 @@
  * این فایل تمام عملیات CRUD با Worker را مدیریت می‌کند
  */
 
-import { Lead } from './types';
+import { Lead, LeadStatus, ServiceType } from './types';
 
-// تبدیل Lead به فرمت مورد نیاز API
-function leadToApiPayload(lead: Lead) {
-  return {
-    // ما lead را در فیلد notes به‌صورت JSON کامل ذخیره می‌کنیم
-    // تا هیچ اطلاعاتی از دست نرود
-    customer_id_ext: lead.id,          // شناسه اصلی در React
-    name: lead.patientName,
-    phone: lead.phone,
-    service_name: lead.service,
-    doctor: lead.doctor,
-    scheduled_at: new Date().toISOString(),
-    status: mapStatus(lead.status),
-    price: lead.announcedCost || 0,
-    paid: lead.contractAmount || 0,
-    notes: JSON.stringify({
-      source: lead.source,
-      date: lead.date,
-      nextFollowUpDate: lead.nextFollowUpDate,
-      isFollowUpCompleted: lead.isFollowUpCompleted,
-      assignedTo: lead.assignedTo,
-      history: lead.history,
-      originalStatus: lead.status,
-    }),
+// ─── تبدیل وضعیت D1 → Lead ─────────────────────
+function mapStatusReverse(status: string): LeadStatus {
+  const map: Record<string, LeadStatus> = {
+    'pending':   'تماس اولیه',
+    'confirmed': 'مشاوره رزرو شد',
+    'done':      'عمل انجام شد',
+    'cancelled': 'از دست رفته',
+    'no_show':   'از دست رفته',
   };
+  return map[status] || 'تماس اولیه';
 }
 
+// ─── تبدیل وضعیت Lead → D1 ─────────────────────
 function mapStatus(status: string): string {
   const map: Record<string, string> = {
-    'تماس اولیه': 'pending',
+    'تماس اولیه':       'pending',
     'اطلاعات ارسال شد': 'pending',
-    'مشاوره رزرو شد': 'confirmed',
-    'مراجعه کرد': 'confirmed',
-    'عمل انجام شد': 'done',
-    'از دست رفته': 'cancelled',
+    'مشاوره رزرو شد':   'confirmed',
+    'مراجعه کرد':       'confirmed',
+    'عمل انجام شد':     'done',
+    'از دست رفته':      'cancelled',
   };
   return map[status] || 'pending';
+}
+
+// ─── تبدیل appointment D1 → Lead ──────────────
+interface D1Appointment {
+  id: number;
+  customer_id: number;
+  customer_name?: string;
+  customer_phone?: string;
+  service_name?: string;
+  doctor?: string;
+  scheduled_at: string;
+  status: string;
+  price?: number;
+  paid?: number;
+  notes?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+function appointmentToLead(appt: D1Appointment): Lead {
+  // تمام اطلاعات اضافی در فیلد notes به‌صورت JSON ذخیره شده
+  let extraData: Record<string, unknown> = {};
+  try {
+    if (appt.notes) extraData = JSON.parse(appt.notes);
+  } catch {
+    // notes متن ساده است
+  }
+
+  const originalStatus = (extraData.originalStatus as LeadStatus) || mapStatusReverse(appt.status);
+
+  return {
+    id:                 extraData.leadId as string || `d1-${appt.id}`,
+    date:               extraData.date as string || appt.scheduled_at.slice(0, 10),
+    patientName:        appt.customer_name || 'نامشخص',
+    phone:              appt.customer_phone || '',
+    doctor:             appt.doctor || 'نامشخص',
+    service:            (appt.service_name || 'سایر') as ServiceType,
+    source:             (extraData.source as string) || 'سایر',
+    status:             originalStatus,
+    announcedCost:      appt.price || 0,
+    contractAmount:     appt.paid || 0,
+    nextFollowUpDate:   (extraData.nextFollowUpDate as string) || '',
+    notes:              (extraData.plainNotes as string) || (typeof extraData.originalStatus === 'undefined' ? appt.notes || '' : ''),
+    isFollowUpCompleted:(extraData.isFollowUpCompleted as boolean) || false,
+    assignedTo:         (extraData.assignedTo as string) || '',
+    history:            (extraData.history as Lead['history']) || [],
+  };
 }
 
 export class AflatousDB {
   private workerUrl: string;
 
   constructor(workerUrl: string) {
-    // حذف / انتهایی
     this.workerUrl = workerUrl.replace(/\/$/, '');
   }
 
-  private async request(path: string, options: RequestInit = {}) {
+  private async request<T = unknown>(path: string, options: RequestInit = {}): Promise<T & { ok: boolean; error?: string }> {
     const res = await fetch(`${this.workerUrl}${path}`, {
       ...options,
       headers: { 'Content-Type': 'application/json', ...(options.headers ?? {}) },
     });
-    const data = await res.json() as { ok: boolean; error?: string; data?: unknown };
+    const data = await res.json() as T & { ok: boolean; error?: string };
     if (!data.ok) throw new Error(data.error || `خطا: ${res.status}`);
     return data;
   }
 
-  // ─── تست اتصال ─────────────────────────────
+  // ─── تست اتصال ─────────────────────────────────
   async ping(): Promise<boolean> {
     try {
-      const r = await this.request('/api/health') as { db: boolean };
+      const r = await this.request<{ db: boolean }>('/api/health');
       return r.db === true;
     } catch {
       return false;
     }
   }
 
-  // ─── ذخیره لید جدید ────────────────────────
+  // ─── دریافت همه لیدها از D1 ────────────────────
+  async getAllLeads(): Promise<Lead[]> {
+    try {
+      // دریافت همه نوبت‌ها با اطلاعات مشتری (صفحه‌بندی تا ۵۰۰ رکورد)
+      const result = await this.request<{ data: D1Appointment[]; total: number }>(
+        '/api/appointments?limit=500'
+      );
+
+      if (!result.data || result.data.length === 0) return [];
+
+      // تبدیل هر appointment به Lead
+      const leads = result.data.map(appointmentToLead);
+
+      // حذف تکراری‌ها بر اساس phone (آخرین رکورد هر شماره)
+      const seen = new Map<string, Lead>();
+      for (const lead of leads) {
+        if (lead.phone) {
+          seen.set(lead.phone, lead);
+        } else {
+          seen.set(lead.id, lead);
+        }
+      }
+
+      return Array.from(seen.values());
+    } catch (e) {
+      console.error('DB getAllLeads error:', e);
+      return [];
+    }
+  }
+
+  // ─── ذخیره لید جدید ────────────────────────────
   async saveLead(lead: Lead, editorName: string): Promise<boolean> {
     try {
-      const payload = leadToApiPayload(lead);
-
-      // اول مشتری را ذخیره کن
+      // پیدا کردن یا ساخت مشتری
       let customerId: number;
       try {
-        const existing = await this.request(`/api/customers?q=${encodeURIComponent(lead.phone)}`) as { data: Array<{ id: number; phone: string }> };
+        const existing = await this.request<{ data: Array<{ id: number; phone: string }> }>(
+          `/api/customers?q=${encodeURIComponent(lead.phone)}`
+        );
         const found = existing.data?.find((c) => c.phone === lead.phone);
         if (found) {
           customerId = found.id;
-          // بروزرسانی اطلاعات مشتری
           await this.request(`/api/customers/${customerId}`, {
             method: 'PATCH',
-            body: JSON.stringify({ name: payload.name, notes: `لید: ${lead.id}` }),
+            body: JSON.stringify({ name: lead.patientName }),
           });
         } else {
-          const created = await this.request('/api/customers', {
+          const created = await this.request<{ data: { id: number } }>('/api/customers', {
             method: 'POST',
-            body: JSON.stringify({ name: payload.name, phone: payload.phone }),
-          }) as { data: { id: number } };
+            body: JSON.stringify({ name: lead.patientName, phone: lead.phone }),
+          });
           customerId = created.data.id;
         }
       } catch {
-        const created = await this.request('/api/customers', {
+        const created = await this.request<{ data: { id: number } }>('/api/customers', {
           method: 'POST',
-          body: JSON.stringify({ name: payload.name, phone: payload.phone }),
-        }) as { data: { id: number } };
+          body: JSON.stringify({ name: lead.patientName, phone: lead.phone }),
+        });
         customerId = created.data.id;
       }
 
-      // نوبت / لید را ذخیره کن
+      // ذخیره appointment با تمام اطلاعات lead در notes
       await this.request('/api/appointments', {
         method: 'POST',
         body: JSON.stringify({
-          customer_id: customerId,
-          service_name: payload.service_name,
-          doctor: payload.doctor,
-          scheduled_at: payload.scheduled_at,
-          status: payload.status,
-          price: payload.price,
-          paid: payload.paid,
-          notes: payload.notes,
+          customer_id:    customerId,
+          service_name:   lead.service,
+          doctor:         lead.doctor,
+          scheduled_at:   new Date().toISOString(),
+          status:         mapStatus(lead.status),
+          price:          lead.announcedCost || 0,
+          paid:           lead.contractAmount || 0,
           payment_method: 'نقد',
+          notes: JSON.stringify({
+            leadId:             lead.id,
+            source:             lead.source,
+            date:               lead.date,
+            nextFollowUpDate:   lead.nextFollowUpDate,
+            isFollowUpCompleted:lead.isFollowUpCompleted,
+            assignedTo:         lead.assignedTo,
+            history:            lead.history,
+            originalStatus:     lead.status,
+            plainNotes:         lead.notes,
+            editorName,
+          }),
         }),
       });
 
@@ -126,58 +199,67 @@ export class AflatousDB {
     }
   }
 
-  // ─── بروزرسانی لید ─────────────────────────
+  // ─── بروزرسانی لید ─────────────────────────────
   async updateLead(lead: Lead, editorName: string): Promise<boolean> {
     try {
-      // پیدا کردن appointment بر اساس شماره تلفن
-      const customers = await this.request(`/api/customers?q=${encodeURIComponent(lead.phone)}`) as { data: Array<{ id: number; phone: string }> };
+      // پیدا کردن مشتری
+      const customers = await this.request<{ data: Array<{ id: number; phone: string }> }>(
+        `/api/customers?q=${encodeURIComponent(lead.phone)}`
+      );
       const customer = customers.data?.find((c) => c.phone === lead.phone);
-      if (!customer) {
-        // اگر پیدا نشد، جدید ذخیره کن
-        return this.saveLead(lead, editorName);
-      }
+      if (!customer) return this.saveLead(lead, editorName);
 
-      const appts = await this.request(`/api/appointments?customer_id=${customer.id}`) as { data: Array<{ id: number }> };
+      // پیدا کردن آخرین appointment این مشتری
+      const appts = await this.request<{ data: Array<{ id: number }> }>(
+        `/api/appointments?customer_id=${customer.id}&limit=1`
+      );
+
       if (appts.data && appts.data.length > 0) {
         const apptId = appts.data[0].id;
         await this.request(`/api/appointments/${apptId}`, {
           method: 'PATCH',
           body: JSON.stringify({
-            service_name: lead.service,
-            doctor: lead.doctor,
-            status: mapStatus(lead.status),
-            price: lead.announcedCost || 0,
-            paid: lead.contractAmount || 0,
+            service_name:   lead.service,
+            doctor:         lead.doctor,
+            status:         mapStatus(lead.status),
+            price:          lead.announcedCost || 0,
+            paid:           lead.contractAmount || 0,
             notes: JSON.stringify({
-              source: lead.source,
-              date: lead.date,
-              nextFollowUpDate: lead.nextFollowUpDate,
-              isFollowUpCompleted: lead.isFollowUpCompleted,
-              assignedTo: lead.assignedTo,
-              history: lead.history,
-              originalStatus: lead.status,
+              leadId:             lead.id,
+              source:             lead.source,
+              date:               lead.date,
+              nextFollowUpDate:   lead.nextFollowUpDate,
+              isFollowUpCompleted:lead.isFollowUpCompleted,
+              assignedTo:         lead.assignedTo,
+              history:            lead.history,
+              originalStatus:     lead.status,
+              plainNotes:         lead.notes,
+              editorName,
             }),
           }),
         });
+        return true;
       } else {
         return this.saveLead(lead, editorName);
       }
-
-      return true;
     } catch (e) {
       console.error('DB updateLead error:', e);
       return false;
     }
   }
 
-  // ─── حذف لید ───────────────────────────────
+  // ─── حذف لید ───────────────────────────────────
   async deleteLead(leadPhone: string): Promise<boolean> {
     try {
-      const customers = await this.request(`/api/customers?q=${encodeURIComponent(leadPhone)}`) as { data: Array<{ id: number; phone: string }> };
+      const customers = await this.request<{ data: Array<{ id: number; phone: string }> }>(
+        `/api/customers?q=${encodeURIComponent(leadPhone)}`
+      );
       const customer = customers.data?.find((c) => c.phone === leadPhone);
       if (!customer) return true;
 
-      const appts = await this.request(`/api/appointments?customer_id=${customer.id}`) as { data: Array<{ id: number }> };
+      const appts = await this.request<{ data: Array<{ id: number }> }>(
+        `/api/appointments?customer_id=${customer.id}&limit=100`
+      );
       for (const appt of appts.data || []) {
         await this.request(`/api/appointments/${appt.id}`, { method: 'DELETE' });
       }
@@ -187,56 +269,4 @@ export class AflatousDB {
       return false;
     }
   }
-// ─── دریافت همه لیدها از D1 ─────────────────────
-async getAllLeads(): Promise<Lead[]> {
-  try {
-    const customersRes = await this.request('/api/customers') as {
-      data: Array<any>;
-    };
-
-    const leads: Lead[] = [];
-
-    for (const customer of customersRes.data || []) {
-      const apptsRes = await this.request(
-        `/api/appointments?customer_id=${customer.id}`
-      ) as {
-        data: Array<any>;
-      };
-
-      for (const appt of apptsRes.data || []) {
-        let extra: any = {};
-
-        try {
-          extra = appt.notes ? JSON.parse(appt.notes) : {};
-        } catch {
-          extra = {};
-        }
-
-        leads.push({
-          id: extra.customer_id_ext || `d1-${appt.id}`,
-          date: extra.date || '',
-          patientName: customer.name || '',
-          phone: customer.phone || '',
-          doctor: appt.doctor || '',
-          service: appt.service_name || '',
-          source: extra.source || 'سایر',
-          status: extra.originalStatus || appt.status || 'تماس اولیه',
-          announcedCost: appt.price || 0,
-          contractAmount: appt.paid || 0,
-          nextFollowUpDate: extra.nextFollowUpDate || '',
-          notes: '',
-          isFollowUpCompleted: extra.isFollowUpCompleted || false,
-          assignedTo: extra.assignedTo || '',
-          history: extra.history || [],
-        } as Lead);
-      }
-    }
-
-    return leads;
-  } catch (e) {
-    console.error('DB getAllLeads error:', e);
-    return [];
-  }
-}
-
 }

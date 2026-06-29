@@ -232,14 +232,12 @@ export default function App() {
 
 
 
-  // Sync / Read from Google Sheets on load
+  // ─── بارگذاری داده‌ها: D1 اولویت دارد، بعد Google Sheets ───────────────
   const loadLeadsFromSheet = async (silently: boolean = false) => {
     if (!silently) setIsLoading(true);
     try {
-      // Exclude Spreadsheet ID from sheet link
       const spreadsheetId = settings.googleSheetUrl.match(/\/d\/([^/]+)/)?.[1] || DEFAULT_SPREADSHEET_ID;
       const sheetLeads = await fetchLeadsFromGviz(spreadsheetId);
-      
       if (sheetLeads.length > 0) {
         setLeads(sheetLeads);
         setSyncStatus('connected');
@@ -257,36 +255,49 @@ export default function App() {
     }
   };
 
-  // Load leads from Cloudflare D1
-  const loadLeadsFromD1 = async () => {
-    if (!db) return;
+  const loadLeadsFromDB = async (silently: boolean = false) => {
+    if (!db) return false;
+    if (!silently) setIsLoading(true);
     try {
-      setIsLoading(true);
-      const result = await db.getAllLeads();
-      if (result && result.length > 0) {
-        setLeads(result);
+      const dbLeads = await db.getAllLeads();
+      if (dbLeads.length > 0) {
+        setLeads(dbLeads);
         setSyncStatus('connected');
-        setConnectionMessage('داده‌ها از پایگاه داده D1 بارگذاری شدند');
+        setConnectionMessage(`${dbLeads.length} لید از پایگاه داده ابری بارگذاری شد`);
+        return true;
       } else {
-        setSyncStatus('connected');
-        setConnectionMessage('اتصال D1 برقرار است - هنوز داده‌ای ثبت نشده');
+        setConnectionMessage('پایگاه داده ابری خالی است - از داده‌های محلی استفاده می‌شود');
+        return false;
       }
-    } catch (err: any) {
-      console.error('D1 load error:', err);
+    } catch (e) {
+      console.error('loadLeadsFromDB error:', e);
       setSyncStatus('error');
-      setConnectionMessage('خطا در بارگذاری داده‌ها از D1');
+      setConnectionMessage('خطا در اتصال به پایگاه داده ابری');
+      return false;
     } finally {
-      setIsLoading(false);
+      if (!silently) setIsLoading(false);
     }
   };
 
-  useEffect(() => {
+  // دکمه Refresh - اگر Worker فعال باشد از D1 بخواند، در غیر این صورت از Sheet
+  const handleRefresh = async () => {
     if (settings.isWorkerEnabled && db) {
-      loadLeadsFromD1();
+      await loadLeadsFromDB(false);
     } else {
+      await loadLeadsFromSheet(false);
+    }
+  };
+
+  // بارگذاری اولیه: D1 اولویت دارد
+  useEffect(() => {
+    if (settings.isWorkerEnabled && settings.workerUrl) {
+      // Worker فعال است - از D1 بخوان
+      loadLeadsFromDB(true);
+    } else {
+      // Worker غیرفعال - از Google Sheets بخوان
       loadLeadsFromSheet(true);
     }
-  }, [settings.googleSheetUrl, settings.isWorkerEnabled, db]);
+  }, [settings.googleSheetUrl, settings.isWorkerEnabled, settings.workerUrl, db]);
 
   // Notifications logic (Pending & Overdue Followups Today)
   const notificationCount = useMemo(() => {
@@ -700,7 +711,7 @@ export default function App() {
 
             {/* Reload and Query fresh leads */}
             <button
-              onClick={() => loadLeadsFromSheet()}
+              onClick={handleRefresh}
               disabled={isLoading}
               className="p-2 hover:bg-gray-50 border border-gray-200 rounded-xl text-gray-500 hover:text-[#0B5F3C] disabled:opacity-50 select-none cursor-pointer"
               title="بارگذاری مجدد پایگاه شیت"
